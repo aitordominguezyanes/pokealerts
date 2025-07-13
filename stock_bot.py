@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scrapea LastLevel – Pokémon TCG y envía SOLO los productos cuyo estado
-cambia al Webhook de n8n (que luego reenvía a Discord).
+cambia al Webhook de n8n (que reenvía a Discord).
 """
 
 import requests, json, os, sys, pathlib
@@ -11,36 +11,44 @@ URL = (
     "https://www.lastlevel.es/distribucion/advanced_search_result.php?"
     "search_in_description=0&inc_subcat=1&keywords=pokemon+tcg"
 )
-HEADERS    = {"User-Agent": "Mozilla/5.0 (Mac)"}   # evita bloqueos
-WEBHOOK    = os.environ["N8N_WEBHOOK"]             # secreto GitHub
-STATE_FILE = pathlib.Path("state.json")            # snapshot local
+HEADERS    = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    "Accept-Language": "es-ES,es;q=0.9",
+}
+WEBHOOK    = os.environ["N8N_WEBHOOK"]
+STATE_FILE = pathlib.Path("state.json")
 
 
 def scrape() -> list[dict]:
-    print("→ solicitando", URL)                    # DEBUG
-    html = requests.get(URL, headers=HEADERS, timeout=20).text
+    print("→ solicitando", URL)
+    r = requests.get(URL, headers=HEADERS, timeout=20)
+    print("[DEBUG] status code:", r.status_code)
+    html = r.text
     soup = BeautifulSoup(html, "html.parser")
     items: list[dict] = []
 
-    for row in soup.select("table.productListing tr"):
-        a = row.select_one("td:nth-of-type(2) a")
+    for prod in soup.select("div.product"):
+        a = prod.select_one("h3.name a")
         if not a:
             continue
         name = a.get_text(strip=True)
         link = a["href"].split("?")[0]
-        txt  = row.get_text().upper()
+
+        btn = prod.select_one("button.checkout-page-button")
+        txt = btn.get_text(strip=True).upper() if btn else ""
+
         state = (
             "Out" if any(w in txt for w in ("AGOTADO", "SIN STOCK", "OUT OF STOCK"))
-            else "In" if "RESERV" in txt
+            else "In" if any(w in txt for w in ("RESERV", "PREORDER"))
             else None
         )
         if state:
             pid = link.split("-p-")[1].split(".")[0]
             items.append({"id": pid, "name": name, "link": link, "state": state})
 
-    print("[DEBUG] productos encontrados:", len(items))      # DEBUG
+    print("[DEBUG] productos encontrados:", len(items))
     if items:
-        print("[DEBUG] primer item:", items[0])              # DEBUG
+        print("[DEBUG] primer item:", items[0])
     return items
 
 
@@ -54,18 +62,13 @@ def save_state(d: dict):
 
 def notify(product: dict):
     r = requests.post(WEBHOOK, json=product, timeout=10)
-    print("POST", r.status_code, product["name"])            # DEBUG
+    print("POST", r.status_code, product["name"])
     if r.status_code >= 400:
         print("[ERROR body]", r.text[:200])
 
 
 def main():
-    try:
-        current = scrape()
-    except Exception as e:                                    # DEBUG
-        print("[ERROR scrape]", e)
-        raise
-
+    current = scrape()
     prev = load_state()
     next_state = {}
 
