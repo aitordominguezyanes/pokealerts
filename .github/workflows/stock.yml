@@ -3,28 +3,44 @@ name: LastLevel stock checker
 on:
   schedule:
     - cron: '*/3 * * * *'        # cada 3 min
-  workflow_dispatch:
+  workflow_dispatch:             # permite lanzarlo a mano
+
+concurrency:
+  group: stock-checker           # no deja que se pisen dos ejecuciones
+  cancel-in-progress: true
 
 jobs:
   bot:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
+      # 1) RESTAURAR snapshot
       - name: Restore state.json
-        uses: actions/cache@v4
+        id: cache-restore
+        uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: stock-state
+          key: stock-state-v1
 
+      # 2) Python + deps
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: python -m pip install --no-cache-dir -r requirements.txt
 
-      - name: Install deps
-        run: pip install -r requirements.txt
-
+      # 3) Ejecutar el bot
       - name: Run bot
         env:
           N8N_WEBHOOK: ${{ secrets.N8N_WEBHOOK }}
         run: python stock_bot.py
+
+      # 4) GUARDAR snapshot actualizado
+      - name: Save state.json
+        if: always()                # se ejecute o no el paso anterior
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: stock-state-v1
+          overwrite: true           # ← pisa siempre la caché
