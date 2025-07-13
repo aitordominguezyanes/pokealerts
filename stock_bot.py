@@ -1,30 +1,26 @@
 #!/usr/bin/env python3
 """
-Scrapea LastLevel – Pokémon TCG y envía SOLO los productos cuyo estado
-cambia al Webhook de n8n (que reenvía a Discord).
+Scrapea LastLevel – Pokémon TCG, navega todas las páginas y envía SOLO los
+productos cuyo estado cambia al Webhook de n8n (que reenvía a Discord).
 """
 
-import requests, json, os, sys, pathlib
+import requests, json, os, sys, pathlib, itertools
 from bs4 import BeautifulSoup
 
-URL = (
-    "https://www.lastlevel.es/distribucion/advanced_search_result.php?"
-    "search_in_description=0&inc_subcat=1&keywords=pokemon+tcg"
+BASE_URL = (
+    "https://www.lastlevel.es/distribucion/advanced_search_result.php"
+    "?search_in_description=0&inc_subcat=1&keywords=pokemon+tcg"
 )
-HEADERS    = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-    "Accept-Language": "es-ES,es;q=0.9",
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
 }
-WEBHOOK    = os.environ["N8N_WEBHOOK"]
-STATE_FILE = pathlib.Path("state.json")
+WEBHOOK    = os.environ["N8N_WEBHOOK"]                    # secreto GitHub
+STATE_FILE = pathlib.Path("state.json")                   # snapshot local
 
 
-def scrape() -> list[dict]:
-    print("→ solicitando", URL)
-    r = requests.get(URL, headers=HEADERS, timeout=20)
-    print("[DEBUG] status code:", r.status_code)
-    html = r.text
-    soup = BeautifulSoup(html, "html.parser")
+def scrape_page(url: str) -> list[dict]:
+    r = requests.get(url, headers=HEADERS, timeout=20)
+    soup = BeautifulSoup(r.text, "html.parser")
     items: list[dict] = []
 
     for prod in soup.select("div.product"):
@@ -33,23 +29,32 @@ def scrape() -> list[dict]:
             continue
         name = a.get_text(strip=True)
         link = a["href"].split("?")[0]
-
-        btn = prod.select_one("button.checkout-page-button")
-        txt = btn.get_text(strip=True).upper() if btn else ""
+        btn  = prod.select_one("button.checkout-page-button")
+        txt  = btn.get_text(strip=True).upper() if btn else ""
 
         state = (
             "Out" if any(w in txt for w in ("AGOTADO", "SIN STOCK", "OUT OF STOCK"))
-            else "In" if any(w in txt for w in ("RESERV", "PREORDER"))
+            else "In"  if any(w in txt for w in ("RESERV", "PREORDER"))
             else None
         )
         if state:
             pid = link.split("-p-")[1].split(".")[0]
             items.append({"id": pid, "name": name, "link": link, "state": state})
-
-    print("[DEBUG] productos encontrados:", len(items))
-    if items:
-        print("[DEBUG] primer item:", items[0])
     return items
+
+
+def scrape_all() -> list[dict]:
+    all_items, page = [], itertools.count(1)
+    for p in page:
+        url = BASE_URL if p == 1 else f"{BASE_URL}&page={p}"
+        items = scrape_page(url)
+        if not items:
+            break
+        all_items.extend(items)
+    print(f"[DEBUG] páginas: {p}, artículos totales: {len(all_items)}")
+    if all_items:
+        print("[DEBUG] primer item:", all_items[0])
+    return all_items
 
 
 def load_state() -> dict:
@@ -68,7 +73,7 @@ def notify(product: dict):
 
 
 def main():
-    current = scrape()
+    current = scrape_all()
     prev = load_state()
     next_state = {}
 
