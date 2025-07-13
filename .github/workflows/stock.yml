@@ -2,13 +2,12 @@ name: LastLevel stock checker
 
 on:
   schedule:
-    - cron: '*/3 * * * *'     # cada 3 min
-  workflow_dispatch:          # botón Run workflow
+    - cron: '*/3 * * * *'        # cada 3 min
+  workflow_dispatch:
 
 jobs:
   bot:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
