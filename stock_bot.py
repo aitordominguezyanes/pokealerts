@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Scrapea LastLevel – Pokémon TCG, navega todas las páginas y envía SOLO los
-productos cuyo estado cambia al Webhook de n8n (que reenvía a Discord).
+Scrapea LastLevel – Pokémon TCG.
+Navega hasta 20 páginas como máximo y sólo envía a n8n los productos
+cuyo estado cambió.
 """
 
-import requests, json, os, sys, pathlib, itertools
+import requests, json, os, sys, pathlib
 from bs4 import BeautifulSoup
 
 BASE_URL = (
@@ -14,8 +15,9 @@ BASE_URL = (
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
 }
-WEBHOOK    = os.environ["N8N_WEBHOOK"]                    # secreto GitHub
-STATE_FILE = pathlib.Path("state.json")                   # snapshot local
+MAX_PAGES  = 20                               # ← cortafuegos infinito
+WEBHOOK    = os.environ["N8N_WEBHOOK"]
+STATE_FILE = pathlib.Path("state.json")
 
 
 def scrape_page(url: str) -> list[dict]:
@@ -29,8 +31,8 @@ def scrape_page(url: str) -> list[dict]:
             continue
         name = a.get_text(strip=True)
         link = a["href"].split("?")[0]
-        btn  = prod.select_one("button.checkout-page-button")
-        txt  = btn.get_text(strip=True).upper() if btn else ""
+        txt  = (prod.select_one("button.checkout-page-button") or
+                prod).get_text(strip=True).upper()
 
         state = (
             "Out" if any(w in txt for w in ("AGOTADO", "SIN STOCK", "OUT OF STOCK"))
@@ -44,16 +46,15 @@ def scrape_page(url: str) -> list[dict]:
 
 
 def scrape_all() -> list[dict]:
-    all_items, page = [], itertools.count(1)
-    for p in page:
-        url = BASE_URL if p == 1 else f"{BASE_URL}&page={p}"
+    all_items = []
+    for page in range(1, MAX_PAGES + 1):
+        url   = BASE_URL if page == 1 else f"{BASE_URL}&page={page}"
         items = scrape_page(url)
+        print(f"[DEBUG] página {page:02d}: {len(items)} artículos")
         if not items:
             break
         all_items.extend(items)
-    print(f"[DEBUG] páginas: {p}, artículos totales: {len(all_items)}")
-    if all_items:
-        print("[DEBUG] primer item:", all_items[0])
+    print("[DEBUG] total artículos:", len(all_items))
     return all_items
 
 
@@ -65,17 +66,16 @@ def save_state(d: dict):
     STATE_FILE.write_text(json.dumps(d))
 
 
-def notify(product: dict):
-    r = requests.post(WEBHOOK, json=product, timeout=10)
-    print("POST", r.status_code, product["name"])
+def notify(prod: dict):
+    r = requests.post(WEBHOOK, json=prod, timeout=10)
+    print("POST", r.status_code, prod["name"])
     if r.status_code >= 400:
         print("[ERROR body]", r.text[:200])
 
 
 def main():
     current = scrape_all()
-    prev = load_state()
-    next_state = {}
+    prev, next_state = load_state(), {}
 
     for p in current:
         next_state[p["id"]] = p["state"]
